@@ -107,9 +107,9 @@ pub fn main() !void {
     var i: usize = 0;
     while (i < w * h) : (i += 1) {
         // log.debug("{}", .{i});
-        const r: u8 = img.?[i * 4];
-        const g: u8 = img.?[i * 4 + 1];
-        const b: u8 = img.?[i * 4 + 2];
+        const r: u8 = img.?[i * 4] * 1.1;
+        const g: u8 = img.?[i * 4 + 1] * 1.1;
+        const b: u8 = img.?[i * 4 + 2] * 1.1;
         // const a: u32 = img.?[i * 4 + 3]; // ignored
 
         const new_color: u32 = getColor(&root_node, r, g, b);
