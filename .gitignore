@@ -1,5 +1,6 @@
 .ccls-cache
 zig-cache
 zig-out
+out
 *.png
 *.ppm

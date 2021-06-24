@@ -10,9 +10,10 @@ pub fn build(b: *Builder) void {
     // exe.setOutputDir(".");
     exe.setTarget(target);
     exe.setBuildMode(mode);
-    exe.addIncludeDir("./stb_image-2.26");
+    exe.addIncludeDir("./lodepng");
     exe.linkLibC();
-    exe.addCSourceFile("./stb_image-2.26/stb_image_impl.c", &[_][]const u8{"-std=c99"});
+    exe.addCSourceFile("./lodepng/lodepng_impl.c", &[_][]const u8{});
+    exe.addCSourceFile("./lodepng/lodepng.c", &[_][]const u8{});
 
     exe.install();
 

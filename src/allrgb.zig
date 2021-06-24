@@ -95,14 +95,16 @@ pub fn main() !void {
 
     // load image
     const filename: [*:0]const u8 = "batata.png";
-    var w: c_int = undefined;
-    var h: c_int = undefined;
-    var nchannels: c_int = undefined;
-    var img: ?[*]u8 = c.stbi_load(filename, &w, &h, &nchannels, 0);
-    if (img == null) {
+    var nchannels: u32 = 4; // TODO
+    var w: c_uint = undefined;
+    var h: c_uint = undefined;
+
+    var img: ?[*]u8 = undefined;
+    if (c.lodepng_decode_file(&img, &w, &h, filename, c.LodePNGColorType.LCT_RGBA, 8) != 0) {
         log.err("Can't load the image {s}.", .{filename});
         return;
     }
+
     log.info("Loaded {}x{} image with {} channels", .{ w, h, nchannels });
 
     // prepare shuffled indexes
@@ -136,9 +138,7 @@ pub fn main() !void {
     // convert image
     i = 0;
     while (i < indexes.items.len) : (i += 1) {
-        const ind: u32 = indexes.items[i] * @intCast(u32, nchannels);
-        // const ind: u32 = i * @intCast(u32, nchannels);
-        // log.debug("{} - {}", .{ i, ind });
+        const ind: u32 = indexes.items[i] * nchannels;
 
         const r: u8 = img.?[ind];
         const g: u8 = img.?[ind + 1];
@@ -155,40 +155,7 @@ pub fn main() !void {
     }
     log.info("Image is converted. Writting...", .{});
 
-    // if (c.stbi_write_png("batata_rgb.png", w, h, nchannels, @ptrCast(*const c_void, img), w * nchannels) == 0) {
-    // log.err("Failed to write img", .{});
-    // }
-    if (!dropPpmImage(img.?, @intCast(u32, w), @intCast(u32, h), "batata_rgb.ppm")) {
+    if (c.lodepng_encode_file("batata_rgb.png", img.?, w, h, c.LodePNGColorType.LCT_RGBA, 8) != 0) {
         log.err("Failed to write img", .{});
     }
-}
-
-fn dropPpmImage(img: [*]u8, w: u32, h: u32, filename: []const u8) bool {
-    // open file
-    const cwd: fs.Dir = fs.cwd();
-    const f: fs.File = cwd.createFile(filename, fs.File.CreateFlags{}) catch return false;
-    // create a buffered writer
-    var buf = std.io.bufferedWriter(f.writer());
-    var buf_writer = buf.writer();
-
-    // ppm file type meta-data
-    buf_writer.print("P6\n{} {}\n255\n", .{ w, h }) catch return false;
-    // write file data
-    var color: [4]u8 = undefined;
-    var i: u32 = 0;
-    while (i < w * h) : (i += 1) {
-        const ind: u32 = i * @intCast(u32, 4);
-
-        color[0] = img[ind];
-        color[1] = img[ind + 1];
-        color[2] = img[ind + 2];
-        color[3] = img[ind + 3]; // ignored
-
-        _ = buf_writer.writeAll(color[0..3]) catch return false;
-    }
-
-    buf.flush() catch return false;
-    f.close();
-
-    return true;
 }
