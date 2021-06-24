@@ -1,12 +1,15 @@
 const std = @import("std");
-const c = @import("c.zig");
+const fs = std.fs;
 const log = std.log;
+
+const c = @import("c.zig");
 
 const Octree = struct {
     refs: usize,
     children: [8]?*Octree,
 };
 
+const rgb_space: usize = 16777216;
 const conflict_loopup = [_][8]u8{
     [_]u8{ 0, 1, 4, 5, 2, 3, 6, 7 },
     [_]u8{ 1, 0, 5, 4, 3, 2, 7, 6 },
@@ -81,17 +84,16 @@ fn getColor(root: *Octree, r: u8, g: u8, b: u8) u32 {
 }
 
 pub fn main() !void {
-    const rgb_space: usize = 16777216;
-
+    // prepare octree
     var color_cnt: usize = rgb_space;
     var root_node = Octree{
         .refs = color_cnt,
         .children = [8]?*Octree{ null, null, null, null, null, null, null, null },
     };
     fillTree(&root_node, color_cnt);
-
     log.info("Tree is done", .{});
 
+    // load image
     const filename: [*:0]const u8 = "batata.png";
     var w: c_int = undefined;
     var h: c_int = undefined;
@@ -101,28 +103,92 @@ pub fn main() !void {
         log.err("Can't load the image {s}.", .{filename});
         return;
     }
-
     log.info("Loaded {}x{} image with {} channels", .{ w, h, nchannels });
 
-    var i: usize = 0;
+    // prepare shuffled indexes
+    var indexes = std.ArrayList(u32).init(std.heap.c_allocator);
+    defer indexes.deinit();
+    var i: u32 = 0;
     while (i < w * h) : (i += 1) {
-        // log.debug("{}", .{i});
-        const r: u8 = img.?[i * 4] * 1.1;
-        const g: u8 = img.?[i * 4 + 1] * 1.1;
-        const b: u8 = img.?[i * 4 + 2] * 1.1;
-        // const a: u32 = img.?[i * 4 + 3]; // ignored
+        indexes.append(i) catch {
+            log.err("Memory alloc for indexes failed.", .{});
+            return;
+        };
+    }
+    // shuffle
+    var prng = std.rand.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.os.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const rand = &prng.random;
+    log.info("Prepared indexes for shuffling", .{});
+
+    i = 0;
+    while (i < indexes.items.len - 2) : (i += 1) {
+        const new_i: u32 = rand.intRangeLessThan(u32, i + 1, @intCast(u32, indexes.items.len));
+        const temp: u32 = indexes.items[i];
+        indexes.items[i] = indexes.items[new_i];
+        indexes.items[new_i] = temp;
+    }
+    log.info("Shuffled indexes", .{});
+
+    // convert image
+    i = 0;
+    while (i < indexes.items.len) : (i += 1) {
+        const ind: u32 = indexes.items[i] * @intCast(u32, nchannels);
+        // const ind: u32 = i * @intCast(u32, nchannels);
+        // log.debug("{} - {}", .{ i, ind });
+
+        const r: u8 = img.?[ind];
+        const g: u8 = img.?[ind + 1];
+        const b: u8 = img.?[ind + 2];
+        const a: u8 = img.?[ind + 3]; // ignored
 
         const new_color: u32 = getColor(&root_node, r, g, b);
         // log.debug("{}", .{new_color});
 
-        img.?[i * 4] = @intCast(u8, (new_color >> 16) & 255);
-        img.?[i * 4 + 1] = @intCast(u8, (new_color >> 8) & 255);
-        img.?[i * 4 + 2] = @intCast(u8, (new_color) & 255);
-        img.?[i * 4 + 3] = 255;
+        img.?[ind] = @intCast(u8, (new_color >> 16) & 255);
+        img.?[ind + 1] = @intCast(u8, (new_color >> 8) & 255);
+        img.?[ind + 2] = @intCast(u8, (new_color) & 255);
+        img.?[ind + 3] = a;
     }
+    log.info("Image is converted. Writting...", .{});
 
-    // int stbi_write_png(char const *filename, int w, int h, int comp, const void *data, int stride_in_bytes);
-    if (c.stbi_write_png("batata_rgb.png", w, h, nchannels, @ptrCast(*c_void, img), w * nchannels) == 0) {
+    // if (c.stbi_write_png("batata_rgb.png", w, h, nchannels, @ptrCast(*const c_void, img), w * nchannels) == 0) {
+    // log.err("Failed to write img", .{});
+    // }
+    if (!dropPpmImage(img.?, @intCast(u32, w), @intCast(u32, h), "batata_rgb.ppm")) {
         log.err("Failed to write img", .{});
     }
+}
+
+fn dropPpmImage(img: [*]u8, w: u32, h: u32, filename: []const u8) bool {
+    // open file
+    const cwd: fs.Dir = fs.cwd();
+    const f: fs.File = cwd.createFile(filename, fs.File.CreateFlags{}) catch return false;
+    // create a buffered writer
+    var buf = std.io.bufferedWriter(f.writer());
+    var buf_writer = buf.writer();
+
+    // ppm file type meta-data
+    buf_writer.print("P6\n{} {}\n255\n", .{ w, h }) catch return false;
+    // write file data
+    var color: [4]u8 = undefined;
+    var i: u32 = 0;
+    while (i < w * h) : (i += 1) {
+        const ind: u32 = i * @intCast(u32, 4);
+
+        color[0] = img[ind];
+        color[1] = img[ind + 1];
+        color[2] = img[ind + 2];
+        color[3] = img[ind + 3]; // ignored
+
+        _ = buf_writer.writeAll(color[0..3]) catch return false;
+    }
+
+    buf.flush() catch return false;
+    f.close();
+
+    return true;
 }
