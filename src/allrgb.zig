@@ -126,19 +126,19 @@ fn genIndexPermutation(color_n: u32, do_random: bool) []u32 {
     var i: u32 = 0;
     while (i < indexes.len) : (i += 1)
         indexes[i] = i;
+    // shuffle
     if (do_random) {
         // random number generator
         var prng = std.rand.DefaultPrng.init(blk: {
             var seed: u64 = undefined;
             std.os.getrandom(std.mem.asBytes(&seed)) catch {
-                log.crit("Os getRandom failed.", .{});
+                log.emerg("Os getRandom failed.", .{});
                 std.process.exit(1);
             };
             break :blk seed;
         });
         const rand = &prng.random;
 
-        // shuffle
         i = 0;
         while (i < indexes.len - 1) : (i += 1) {
             const new_i: u32 = rand.intRangeLessThan(u32, i + 1, @intCast(u32, indexes.len));
@@ -147,6 +147,8 @@ fn genIndexPermutation(color_n: u32, do_random: bool) []u32 {
             indexes[new_i] = temp;
         }
         log.info("Shuffled indexes", .{});
+    } else {
+        log.info("Indexes were not shuffled", .{});
     }
 
     return indexes;
@@ -264,7 +266,7 @@ fn check(root_node: *Octree) u32 {
     return ret;
 }
 
-fn convertImg(img: *Image, do_random: bool, algorithm: i32, do_check: bool) void {
+fn convertImg(img: *Image, do_random: bool, algorithm: i32, do_check: bool, noise: f32) void {
     // prepare octree
     // TODO lazy allocations?
     var root_node = Octree{
@@ -280,7 +282,21 @@ fn convertImg(img: *Image, do_random: bool, algorithm: i32, do_check: bool) void
     const indexes = genIndexPermutation(img.w * img.h, do_random);
     defer allocator.free(indexes);
 
+    // random number generator for noise
+    var prng = std.rand.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        std.os.getrandom(std.mem.asBytes(&seed)) catch {
+            log.emerg("Os getRandom failed.", .{});
+            std.process.exit(1);
+        };
+        break :blk seed;
+    });
+    const rand = &prng.random;
+
     // convert image
+    log.info("Applying {}% noise to the image.", .{@floatToInt(u32, noise * 100)});
+    log.info("Using algorithm {} for color selection.", .{algorithm});
+    const noise2: f32 = noise * 2.0;
     var i: u32 = 0;
     while (i < indexes.len) : (i += 1) {
         const ind: u32 = indexes[i] * img.nchannels;
@@ -291,6 +307,31 @@ fn convertImg(img: *Image, do_random: bool, algorithm: i32, do_check: bool) void
             .b = img.data.?[ind + 2],
             .a = img.data.?[ind + 3], // ignored
         };
+
+        if (noise > 0) { // adding noise to image produces better results
+            var new_r: f32 = @intToFloat(f32, color.r) * (1.0 + rand.float(f32) * noise2 - noise);
+            if (new_r < 0) {
+                new_r = 0;
+            } else if (new_r > 255) {
+                new_r = 255;
+            }
+            var new_g: f32 = @intToFloat(f32, color.g) * (1.0 + rand.float(f32) * noise2 - noise);
+            if (new_g < 0) {
+                new_g = 0;
+            } else if (new_g > 255) {
+                new_g = 255;
+            }
+            var new_b: f32 = @intToFloat(f32, color.b) * (1.0 + rand.float(f32) * noise2 - noise);
+            if (new_b < 0) {
+                new_b = 0;
+            } else if (new_b > 255) {
+                new_b = 255;
+            }
+
+            color.r = @floatToInt(u8, new_r);
+            color.g = @floatToInt(u8, new_g);
+            color.b = @floatToInt(u8, new_b);
+        }
 
         color = getColor(&root_node, &color, algorithm);
 
@@ -309,7 +350,7 @@ fn convertImg(img: *Image, do_random: bool, algorithm: i32, do_check: bool) void
 }
 
 fn usage() void {
-    log.info("./allrgb [--no_random] [--slow] [--do_check] [-o <out.png>] <filename.png>", .{});
+    log.info("./allrgb [--no_random] [--slow] [--do_check] [--noise <int>] [-o <out.png>] <filename.png>", .{});
     std.process.exit(1);
 }
 
@@ -323,6 +364,7 @@ pub fn main() !void {
     var do_random: bool = true;
     var algorithm: i32 = 0;
     var do_check: bool = false;
+    var noise: f32 = 0.10;
 
     var arg_i: usize = 0;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -336,6 +378,10 @@ pub fn main() !void {
             algorithm = 1;
         } else if (std.mem.eql(u8, arg, "--do_check")) {
             do_check = true;
+        } else if (std.mem.eql(u8, arg, "--noise")) {
+            arg_i += 1;
+            const parsed: c_long = c.strtol(args[arg_i], null, 10);
+            noise = @intToFloat(f32, parsed) / 100.0;
         } else {
             filename = arg;
         }
@@ -346,7 +392,7 @@ pub fn main() !void {
     // load image
     var img = loadImage(filename.?);
 
-    convertImg(&img, do_random, algorithm, do_check);
+    convertImg(&img, do_random, algorithm, do_check, noise);
     log.info("Image is converted. Writting...", .{});
 
     if (c.lodepng_encode_file(outfile, img.data, img.w, img.h, img.pngcolortype, img.bitdepth) != 0) {
