@@ -5,6 +5,20 @@ const allocator = std.heap.c_allocator;
 
 const c = @import("c.zig");
 
+// Consts
+const rgb_space: usize = 16777216;
+const conflict_lookup = [_][7]u8{
+    [_]u8{ 1, 4, 5, 2, 3, 6, 7 },
+    [_]u8{ 0, 5, 4, 3, 2, 7, 6 },
+    [_]u8{ 3, 6, 7, 0, 1, 4, 5 },
+    [_]u8{ 2, 7, 6, 1, 0, 5, 4 },
+    [_]u8{ 5, 0, 1, 6, 7, 2, 3 },
+    [_]u8{ 4, 1, 0, 7, 6, 3, 2 },
+    [_]u8{ 7, 2, 3, 4, 5, 0, 1 },
+    [_]u8{ 6, 3, 2, 5, 4, 1, 0 },
+};
+
+// Structs
 const Octree = struct {
     refs: usize,
     children: [8]?*Octree,
@@ -62,13 +76,11 @@ const Color = struct {
     }
 };
 
-const rgb_space: usize = 16777216;
-
 fn fillTree(n: *Octree, cnt: usize, allocator_inner: *std.mem.Allocator) void {
     const next_cnt: usize = cnt / 8;
 
     var new_nodes: []Octree = allocator_inner.alloc(Octree, 8) catch {
-        log.err("Alloc error", .{});
+        log.crit("Alloc error", .{});
         return;
     };
 
@@ -107,7 +119,7 @@ fn loadImage(filename: [*:0]const u8) Image {
 fn genIndexPermutation(color_n: u32, do_random: bool) []u32 {
     // prepare shuffled indexes
     var indexes = allocator.alloc(u32, color_n) catch {
-        log.err("Memory alloc for indexes failed.", .{});
+        log.crit("Memory alloc for indexes failed.", .{});
         std.process.exit(1);
     };
 
@@ -119,7 +131,7 @@ fn genIndexPermutation(color_n: u32, do_random: bool) []u32 {
         var prng = std.rand.DefaultPrng.init(blk: {
             var seed: u64 = undefined;
             std.os.getrandom(std.mem.asBytes(&seed)) catch {
-                log.err("Os getRandom failed.", .{});
+                log.crit("Os getRandom failed.", .{});
                 std.process.exit(1);
             };
             break :blk seed;
@@ -140,6 +152,23 @@ fn genIndexPermutation(color_n: u32, do_random: bool) []u32 {
     return indexes;
 }
 
+fn getColorConflict0(curr_node: *Octree, sel_i: *u8, sel: **Octree) bool {
+    var found: bool = false;
+    const lookup_array: [7]u8 = conflict_lookup[sel_i.*];
+
+    var j: u8 = 0;
+    while (j < 8) : (j += 1) {
+        sel_i.* = lookup_array[j];
+        sel.* = curr_node.children[sel_i.*].?;
+        if (sel.*.refs > 0) {
+            found = true;
+            break;
+        }
+    }
+
+    return found;
+}
+
 fn redmean(c1: *Color, c2: *Color) f32 {
     const c1r: f32 = @intToFloat(f32, c1.r);
     const c1g: f32 = @intToFloat(f32, c1.g);
@@ -154,42 +183,59 @@ fn redmean(c1: *Color, c2: *Color) f32 {
         (2 + (255 - rm) / 256) * std.math.pow(f32, c2b - c1b, 2));
 }
 
-fn getColor(root: *Octree, color: *Color) Color {
+fn getColorConflict1(curr_node: *Octree, color: *Color, i: u3, sel_i: *u8, sel: **Octree) bool {
+    var color_copy: Color = color.*;
+    var best_dist: ?f32 = null;
+
+    var found: bool = false;
+    var j: u8 = 0;
+    while (j < 8) : (j += 1) {
+        const child = curr_node.children[j].?;
+        if (child.refs <= 0) continue;
+
+        color_copy.setStep(j, i);
+        const child_dist = redmean(color, &color_copy);
+
+        if (best_dist == null or best_dist.? > child_dist) {
+            found = true;
+            best_dist = child_dist;
+            sel_i.* = j;
+            sel.* = child;
+        }
+    }
+
+    return found;
+}
+
+fn getColor(root: *Octree, color: *Color, algorithm: i32) Color {
     var curr_node: *Octree = root;
     var ret = Color{ .a = color.a };
 
     var i: i8 = 7;
     while (i >= 0) : (i -= 1) {
+        if (curr_node.refs <= 0) {
+            log.emerg("Color selection selected a repeated color. Aborting.", .{});
+            std.process.exit(1);
+        }
         curr_node.refs -= 1;
 
         var sel_i = color.getStep(@intCast(u3, i));
         var sel: *Octree = curr_node.children[sel_i].?;
 
-        if (sel.refs <= 0) { // TODO better algorithm for dealing with conflicts
-            var color_copy: Color = color.*;
-            var best_dist: ?f32 = null;
-
-            var found: bool = false;
-            var j: u8 = 0;
-            while (j < 8) : (j += 1) {
-                const child = curr_node.children[j].?;
-                if (child.refs <= 0) continue;
-
-                color_copy.setStep(j, @intCast(u3, i));
-                const child_dist = redmean(color, &color_copy);
-
-                if (best_dist == null or best_dist.? > child_dist) {
-                    found = true;
-                    best_dist = child_dist;
-                    sel_i = j;
-                    sel = child;
-                }
-            }
-
-            // TODO die func.
-            if (!found) {
-                log.err("Something went wrong while selecting colors.", .{});
-                std.process.exit(1);
+        if (sel.refs <= 0) {
+            switch (algorithm) {
+                0 => {
+                    if (!getColorConflict0(curr_node, &sel_i, &sel))
+                        log.crit("Something went wrong while selecting colors: no available colors. Will repeat a color.", .{});
+                },
+                1 => {
+                    if (!getColorConflict1(curr_node, color, @intCast(u3, i), &sel_i, &sel))
+                        log.crit("Something went wrong while selecting colors: no available colors. Will repeat a color.", .{});
+                },
+                else => {
+                    log.emerg("Unknown algorithm.", .{});
+                    std.process.exit(1);
+                },
             }
         }
 
@@ -200,7 +246,7 @@ fn getColor(root: *Octree, color: *Color) Color {
     return ret;
 }
 
-fn convertImg(img: *Image, do_random: bool) void {
+fn convertImg(img: *Image, do_random: bool, algorithm: i32) void {
     // prepare octree
     // TODO lazy allocations?
     var root_node = Octree{
@@ -228,7 +274,7 @@ fn convertImg(img: *Image, do_random: bool) void {
             .a = img.data.?[ind + 3], // ignored
         };
 
-        color = getColor(&root_node, &color);
+        color = getColor(&root_node, &color, algorithm);
 
         img.data.?[ind] = color.r;
         img.data.?[ind + 1] = color.g;
@@ -252,6 +298,7 @@ pub fn main() !void {
     var filename: ?[*:0]const u8 = null;
     var outfile: [*:0]const u8 = "out.png";
     var do_random: bool = true;
+    var algorithm: i32 = 0;
 
     var arg_i: usize = 0;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -261,6 +308,8 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "-o")) {
             arg_i += 1;
             outfile = args[arg_i];
+        } else if (std.mem.eql(u8, arg, "--slow")) {
+            algorithm = 1;
         } else {
             filename = arg;
         }
@@ -271,10 +320,10 @@ pub fn main() !void {
     // load image
     var img = loadImage(filename.?);
 
-    convertImg(&img, do_random);
+    convertImg(&img, do_random, algorithm);
     log.info("Image is converted. Writting...", .{});
 
     if (c.lodepng_encode_file(outfile, img.data, img.w, img.h, img.pngcolortype, img.bitdepth) != 0) {
-        log.err("Failed to write img", .{});
+        log.crit("Failed to write img", .{});
     }
 }

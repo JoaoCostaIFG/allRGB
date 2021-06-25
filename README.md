@@ -8,4 +8,6 @@ https://tpgit.github.io/UnOfficialLeptDocs/leptonica/color-quantization.html
 
 https://github.com/fogleman/gorgb - for lookup table
 
+https://www.compuphase.com/cmetric.htm
+
 lodepng
