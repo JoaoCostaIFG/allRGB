@@ -96,10 +96,26 @@ tone.
   potentially allows the most similar color (based on distances). This criterion
   is noticeably slower than the previous one, but is faster than converting the
   colors to another color space (e.g.: CIELAB) and allows us keep working in RGB
-  only (stay in theme). Images produced are 'more colorful' when using this
+  only (stay in theme). Images produced are 'more vibrant' when using this
   criterion.
 
 ## Examples
+
+- Image
+
+![Arch cato](./examples/cato.jpg)
+
+- Image produced using the program's default options
+
+![Arch cato](./examples/cato_default.jpg)
+
+- Image produced using the `--slow` option
+
+![Arch cato](./examples/cato_slow.jpg)
+
+- Image produced without introducing noise to the image
+
+![Arch cato](./examples/cato_no_noise.jpg)
 
 ## LodePNG
 
@@ -108,7 +124,7 @@ tone.
 
 ## Bibliography
 
-- [Octree to repsent RGB space](https://www.cubic.org/docs/octree.htm)
+- [Octree to represent RGB space](https://www.cubic.org/docs/octree.htm)
 - [Color quantization using an octree](http://www.leptonica.org/papers/colorquant.pdf)
 - [Color quantization for dithering](https://tpgit.github.io/UnOfficialLeptDocs/leptonica/color-quantization.html)
 - [Source for the lookup table](https://github.com/fogleman/gorgb)

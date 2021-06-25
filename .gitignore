@@ -2,5 +2,5 @@
 zig-cache
 zig-out
 out
-*.png
-*.ppm
+out.png
+out.ppm
