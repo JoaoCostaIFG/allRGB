@@ -19,6 +19,27 @@ const Image = struct {
     data: ?[*]u8 = undefined,
 };
 
+const Color = struct {
+    r: u8 = 0,
+    g: u8 = 0,
+    b: u8 = 0,
+    a: u8 = 255,
+
+    pub fn getStep(self: *Color, i: u3) u8 {
+        const mask: u8 = std.math.pow(u8, 2, i);
+
+        return (((self.r & mask) >> i) << 2) +
+            (((self.g & mask) >> i) << 1) +
+            ((self.b & mask) >> i);
+    }
+
+    pub fn setStep(self: *Color, step: u8, i: u3) void {
+        self.r += ((step & 4) >> 2) << i;
+        self.g += ((step & 2) >> 1) << i;
+        self.b += (step & 1) << i;
+    }
+};
+
 const rgb_space: usize = 16777216;
 const conflict_lookup = [_][8]u8{
     [_]u8{ 0, 1, 4, 5, 2, 3, 6, 7 },
@@ -50,19 +71,15 @@ fn fillTree(n: *Octree, cnt: usize, allocator_inner: *std.mem.Allocator) void {
     }
 }
 
-fn getColor(root: *Octree, r: u8, g: u8, b: u8) u32 {
+fn getColor(root: *Octree, color: *Color) Color {
     var curr_node: *Octree = root;
-    var ret: u32 = 0;
+    var ret = Color{ .a = color.a };
 
     var i: i8 = 7;
     while (i >= 0) : (i -= 1) {
         curr_node.refs -= 1;
 
-        const mask: u8 = std.math.pow(u8, 2, @intCast(u8, i));
-        var sel_i: u32 = (((r & mask) >> @intCast(u3, i)) << 2) +
-            (((g & mask) >> @intCast(u3, i)) << 1) +
-            ((b & mask) >> @intCast(u3, i));
-
+        var sel_i = color.getStep(@intCast(u3, i));
         var sel: *Octree = curr_node.children[sel_i].?;
 
         if (sel.refs <= 0) { // TODO better algorithm for dealing with conflicts
@@ -78,12 +95,7 @@ fn getColor(root: *Octree, r: u8, g: u8, b: u8) u32 {
             }
         }
 
-        // we always reach this
-        const new_r: u32 = (((sel_i & 4) >> 2) << @intCast(u5, i));
-        const new_g: u32 = (((sel_i & 2) >> 1) << @intCast(u5, i));
-        const new_b: u32 = ((sel_i & 1) << @intCast(u5, i));
-
-        ret += (new_r << 16) + (new_g << 8) + new_b;
+        ret.setStep(sel_i, @intCast(u3, i));
         curr_node = sel;
     }
 
@@ -168,17 +180,19 @@ fn convertImg(img: *Image, do_random: bool) void {
     while (i < indexes.len) : (i += 1) {
         const ind: u32 = indexes[i] * img.nchannels;
 
-        const r: u8 = img.data.?[ind];
-        const g: u8 = img.data.?[ind + 1];
-        const b: u8 = img.data.?[ind + 2];
-        const a: u8 = img.data.?[ind + 3]; // ignored
+        var color = Color{
+            .r = img.data.?[ind],
+            .g = img.data.?[ind + 1],
+            .b = img.data.?[ind + 2],
+            .a = img.data.?[ind + 3], // ignored
+        };
 
-        const new_color: u32 = getColor(&root_node, r, g, b);
+        color = getColor(&root_node, &color);
 
-        img.data.?[ind] = @intCast(u8, (new_color >> 16) & 255);
-        img.data.?[ind + 1] = @intCast(u8, (new_color >> 8) & 255);
-        img.data.?[ind + 2] = @intCast(u8, (new_color) & 255);
-        img.data.?[ind + 3] = a;
+        img.data.?[ind] = color.r;
+        img.data.?[ind + 1] = color.g;
+        img.data.?[ind + 2] = color.b;
+        img.data.?[ind + 3] = color.a;
     }
 
     log.info("Used {} different colors", .{rgb_space - root_node.refs});
