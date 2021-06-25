@@ -6,7 +6,7 @@ const allocator = std.heap.c_allocator;
 const c = @import("c.zig");
 
 // Consts
-const rgb_space: usize = 16777216;
+const rgb_space: u32 = 16777216;
 const conflict_lookup = [_][7]u8{
     [_]u8{ 1, 4, 5, 2, 3, 6, 7 },
     [_]u8{ 0, 5, 4, 3, 2, 7, 6 },
@@ -20,7 +20,7 @@ const conflict_lookup = [_][7]u8{
 
 // Structs
 const Octree = struct {
-    refs: usize,
+    refs: u32,
     children: [8]?*Octree,
 };
 
@@ -76,8 +76,8 @@ const Color = struct {
     }
 };
 
-fn fillTree(n: *Octree, cnt: usize, allocator_inner: *std.mem.Allocator) void {
-    const next_cnt: usize = cnt / 8;
+fn fillTree(n: *Octree, cnt: u32, allocator_inner: *std.mem.Allocator) void {
+    const next_cnt: u32 = cnt / 8;
 
     var new_nodes: []Octree = allocator_inner.alloc(Octree, 8) catch {
         log.crit("Alloc error", .{});
@@ -191,7 +191,7 @@ fn getColorConflict1(curr_node: *Octree, color: *Color, i: u3, sel_i: *u8, sel: 
     var j: u8 = 0;
     while (j < 8) : (j += 1) {
         const child = curr_node.children[j].?;
-        if (child.refs <= 0) continue;
+        if (child.refs == 0) continue;
 
         color_copy.setStep(j, i);
         const child_dist = redmean(color, &color_copy);
@@ -213,7 +213,7 @@ fn getColor(root: *Octree, color: *Color, algorithm: i32) Color {
 
     var i: i8 = 7;
     while (i >= 0) : (i -= 1) {
-        if (curr_node.refs <= 0) {
+        if (curr_node.refs == 0) {
             log.emerg("Color selection selected a repeated color. Aborting.", .{});
             std.process.exit(1);
         }
@@ -222,7 +222,7 @@ fn getColor(root: *Octree, color: *Color, algorithm: i32) Color {
         var sel_i = color.getStep(@intCast(u3, i));
         var sel: *Octree = curr_node.children[sel_i].?;
 
-        if (sel.refs <= 0) {
+        if (sel.refs == 0) {
             switch (algorithm) {
                 0 => {
                     if (!getColorConflict0(curr_node, &sel_i, &sel))
@@ -243,10 +243,28 @@ fn getColor(root: *Octree, color: *Color, algorithm: i32) Color {
         curr_node = sel;
     }
 
+    // use selected leaf
+    if (curr_node.refs == 0) {
+        log.emerg("Color selection selected a repeated color. Aborting.", .{});
+        std.process.exit(1);
+    }
+    curr_node.refs -= 1;
+
     return ret;
 }
 
-fn convertImg(img: *Image, do_random: bool, algorithm: i32) void {
+fn check(root_node: *Octree) u32 {
+    var ret: u32 = root_node.refs;
+
+    for (root_node.children) |child| {
+        if (child != null)
+            ret += check(child.?);
+    }
+
+    return ret;
+}
+
+fn convertImg(img: *Image, do_random: bool, algorithm: i32, do_check: bool) void {
     // prepare octree
     // TODO lazy allocations?
     var root_node = Octree{
@@ -282,11 +300,16 @@ fn convertImg(img: *Image, do_random: bool, algorithm: i32) void {
         img.data.?[ind + 3] = color.a;
     }
 
-    log.info("Used {} different colors", .{rgb_space - root_node.refs});
+    const used_colors: u32 = rgb_space - root_node.refs;
+    log.info("Used {} different colors", .{used_colors});
+    if (do_check) {
+        log.info("Checking...", .{});
+        log.info("Check returned {} refs.", .{check(&root_node)});
+    }
 }
 
 fn usage() void {
-    log.info("./allrgb [--no_random] [-o <out.png>] <filename.png>", .{});
+    log.info("./allrgb [--no_random] [--slow] [--do_check] [-o <out.png>] <filename.png>", .{});
     std.process.exit(1);
 }
 
@@ -299,6 +322,7 @@ pub fn main() !void {
     var outfile: [*:0]const u8 = "out.png";
     var do_random: bool = true;
     var algorithm: i32 = 0;
+    var do_check: bool = false;
 
     var arg_i: usize = 0;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -310,6 +334,8 @@ pub fn main() !void {
             outfile = args[arg_i];
         } else if (std.mem.eql(u8, arg, "--slow")) {
             algorithm = 1;
+        } else if (std.mem.eql(u8, arg, "--do_check")) {
+            do_check = true;
         } else {
             filename = arg;
         }
@@ -320,7 +346,7 @@ pub fn main() !void {
     // load image
     var img = loadImage(filename.?);
 
-    convertImg(&img, do_random, algorithm);
+    convertImg(&img, do_random, algorithm, do_check);
     log.info("Image is converted. Writting...", .{});
 
     if (c.lodepng_encode_file(outfile, img.data, img.w, img.h, img.pngcolortype, img.bitdepth) != 0) {
