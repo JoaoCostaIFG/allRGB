@@ -180,6 +180,8 @@ fn convertImg(img: *Image, do_random: bool) void {
         img.data.?[ind + 2] = @intCast(u8, (new_color) & 255);
         img.data.?[ind + 3] = a;
     }
+
+    log.info("Used {} different colors", .{rgb_space - root_node.refs});
 }
 
 fn usage() void {
