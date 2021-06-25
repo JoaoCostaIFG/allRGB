@@ -34,23 +34,35 @@ const Color = struct {
     }
 
     pub fn setStep(self: *Color, step: u8, i: u3) void {
-        self.r += ((step & 4) >> 2) << i;
-        self.g += ((step & 2) >> 1) << i;
-        self.b += (step & 1) << i;
+        const mask = @intCast(u8, 1) << i;
+
+        // red
+        const r_bit = ((step & 4) >> 2);
+        if (r_bit == 1) { // set
+            self.r |= mask;
+        } else { // clear
+            self.r &= ~mask;
+        }
+
+        // green
+        const g_bit = ((step & 2) >> 1);
+        if (g_bit == 1) { // set
+            self.g |= mask;
+        } else { // clear
+            self.g &= ~mask;
+        }
+
+        // blue
+        const b_bit = (step & 1);
+        if (b_bit == 1) { // set
+            self.b |= mask;
+        } else { // clear
+            self.b &= ~mask;
+        }
     }
 };
 
 const rgb_space: usize = 16777216;
-const conflict_lookup = [_][8]u8{
-    [_]u8{ 0, 1, 4, 5, 2, 3, 6, 7 },
-    [_]u8{ 1, 0, 5, 4, 3, 2, 7, 6 },
-    [_]u8{ 2, 3, 6, 7, 0, 1, 4, 5 },
-    [_]u8{ 3, 2, 7, 6, 1, 0, 5, 4 },
-    [_]u8{ 4, 5, 0, 1, 6, 7, 2, 3 },
-    [_]u8{ 5, 4, 1, 0, 7, 6, 3, 2 },
-    [_]u8{ 6, 7, 2, 3, 4, 5, 0, 1 },
-    [_]u8{ 7, 6, 3, 2, 5, 4, 1, 0 },
-};
 
 fn fillTree(n: *Octree, cnt: usize, allocator_inner: *std.mem.Allocator) void {
     const next_cnt: usize = cnt / 8;
@@ -69,37 +81,6 @@ fn fillTree(n: *Octree, cnt: usize, allocator_inner: *std.mem.Allocator) void {
         if (next_cnt > 0)
             fillTree(&new_nodes[i], next_cnt, allocator_inner);
     }
-}
-
-fn getColor(root: *Octree, color: *Color) Color {
-    var curr_node: *Octree = root;
-    var ret = Color{ .a = color.a };
-
-    var i: i8 = 7;
-    while (i >= 0) : (i -= 1) {
-        curr_node.refs -= 1;
-
-        var sel_i = color.getStep(@intCast(u3, i));
-        var sel: *Octree = curr_node.children[sel_i].?;
-
-        if (sel.refs <= 0) { // TODO better algorithm for dealing with conflicts
-            const lookup_array: [8]u8 = conflict_lookup[sel_i];
-
-            var j: u8 = 0;
-            while (j < 8) : (j += 1) {
-                sel_i = lookup_array[j];
-                sel = curr_node.children[sel_i].?;
-                if (sel.refs > 0) {
-                    break;
-                }
-            }
-        }
-
-        ret.setStep(sel_i, @intCast(u3, i));
-        curr_node = sel;
-    }
-
-    return ret;
 }
 
 fn loadImage(filename: [*:0]const u8) Image {
@@ -157,6 +138,66 @@ fn genIndexPermutation(color_n: u32, do_random: bool) []u32 {
     }
 
     return indexes;
+}
+
+fn redmean(c1: *Color, c2: *Color) f32 {
+    const c1r: f32 = @intToFloat(f32, c1.r);
+    const c1g: f32 = @intToFloat(f32, c1.g);
+    const c1b: f32 = @intToFloat(f32, c1.b);
+    const c2r: f32 = @intToFloat(f32, c2.r);
+    const c2g: f32 = @intToFloat(f32, c2.g);
+    const c2b: f32 = @intToFloat(f32, c2.b);
+
+    const rm: f32 = (c1r + c2r) / 2;
+    return std.math.sqrt((2 + rm / 256) * std.math.pow(f32, c2r - c1r, 2) +
+        4 * std.math.pow(f32, c2g - c1g, 2) +
+        (2 + (255 - rm) / 256) * std.math.pow(f32, c2b - c1b, 2));
+}
+
+fn getColor(root: *Octree, color: *Color) Color {
+    var curr_node: *Octree = root;
+    var ret = Color{ .a = color.a };
+
+    var i: i8 = 7;
+    while (i >= 0) : (i -= 1) {
+        curr_node.refs -= 1;
+
+        var sel_i = color.getStep(@intCast(u3, i));
+        var sel: *Octree = curr_node.children[sel_i].?;
+
+        if (sel.refs <= 0) { // TODO better algorithm for dealing with conflicts
+            var color_copy: Color = color.*;
+            var best_dist: ?f32 = null;
+
+            var found: bool = false;
+            var j: u8 = 0;
+            while (j < 8) : (j += 1) {
+                const child = curr_node.children[j].?;
+                if (child.refs <= 0) continue;
+
+                color_copy.setStep(j, @intCast(u3, i));
+                const child_dist = redmean(color, &color_copy);
+
+                if (best_dist == null or best_dist.? > child_dist) {
+                    found = true;
+                    best_dist = child_dist;
+                    sel_i = j;
+                    sel = child;
+                }
+            }
+
+            // TODO die func.
+            if (!found) {
+                log.err("Something went wrong while selecting colors.", .{});
+                std.process.exit(1);
+            }
+        }
+
+        ret.setStep(sel_i, @intCast(u3, i));
+        curr_node = sel;
+    }
+
+    return ret;
 }
 
 fn convertImg(img: *Image, do_random: bool) void {
