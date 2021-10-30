@@ -1,9 +1,9 @@
 # AllRGB
 
-Convert an input PNG image file to a an output PNG image file where every pixel
-is a different color from all the others. It works with images of any aspect
-ration, but care needs to be taken to not use images with more than 16777216
-pixels (number of RGB colors).
+Convert an input PNG image file to an output PNG image file where every pixel is
+a different color from all the others. It works with images of any aspect ratio,
+but care needs to be taken to not use images with more than 16777216 pixels
+(number of RGB colors).
 
 The main interest of this program is to input images with 16777216 pixels (e.g.:
 4096x4096 px) so we get an output with the different RGB colors. The idea came
